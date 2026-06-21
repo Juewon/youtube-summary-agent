@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# yt-script — 유튜브 자막 추출/정리(추출 모드) + 구조화 요약 저장(--save 모드).
+#
+#   추출:  yt-script <유튜브 URL> [언어코드(기본 ko)]
+#          -> {출력}/_transcripts/{날짜}_{제목}_{VID}.txt 생성  ({출력} 기본=소스 형제 summaries/, YT_OUT_DIR 로 변경)
+#             (헤더 + 챕터 구간별 본문). stdout 에 "OUTPUT_FILE: <경로>" 마커.
+#   저장:  yt-script --save <transcript_path> <domain>   (요약 .md 를 stdin 으로)
+#          -> ${YT_OUT_DIR}/{정규화도메인}/{stem}.md 저장.
+#             경로 조립·폴더 생성·도메인 정규화는 전부 여기서(결정론적·경로탈출 차단).
+#
+# 두뇌(요약·도메인 판단)는 Claude Code. 이 스크립트는 추출과 파일쓰기·경로안전만 담당.
+set -euo pipefail
+
+# 자기 실제 경로(심링크 해석) — ytclean.py 위치와 기본 출력폴더 계산에 쓴다.
+SELF="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0" 2>/dev/null || echo "$0")"
+SELF_DIR="$(dirname "$SELF")"
+
+# 기본 출력 폴더: 소스 폴더의 형제 'summaries' (예: youtube/yt_summary_agent -> youtube/summaries).
+# YT_OUT_DIR 환경변수로 언제든 덮어쓸 수 있다.
+OUT_DIR="${YT_OUT_DIR:-$(dirname "$SELF_DIR")/summaries}"
+
+# ytclean.py 는 스크립트 실제 경로 옆에 있다(심링크로 실행돼도 OK).
+resolve_clean() {
+  echo "$SELF_DIR/ytclean.py"
+}
+
+# ──────────────────────────────────────────────────────────────────────────
+# 저장 모드:  yt-script --save <transcript_path> <domain>   (.md 본문은 stdin)
+# ──────────────────────────────────────────────────────────────────────────
+if [ "${1:-}" = "--save" ]; then
+  TRANSCRIPT="${2:-}"
+  DOMAIN_RAW="${3:-}"
+  if [ -z "$TRANSCRIPT" ] || [ -z "$DOMAIN_RAW" ]; then
+    echo "사용법: yt-script --save <transcript_path> <domain>   (요약 .md 는 stdin)" >&2
+    exit 1
+  fi
+
+  # OUT_DIR 도 realpath 로 정규화(macOS /var -> /private/var 등 심링크 차이 흡수)
+  TDIR="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUT_DIR/_transcripts")"
+  TABS="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$TRANSCRIPT")"
+  case "$TABS" in
+    "$TDIR"/*) : ;;  # OUT_DIR/_transcripts/ 내부만 허용
+    *) echo "오류: transcript 경로가 $TDIR 내부가 아닙니다: $TABS" >&2; exit 1 ;;
+  esac
+  if [ ! -f "$TABS" ]; then
+    echo "오류: transcript 파일이 없습니다: $TABS" >&2; exit 1
+  fi
+
+  STEM="$(basename "$TABS")"; STEM="${STEM%.txt}"
+
+  # 도메인 정규화: NFC, 허용문자만, 길이 제한, 빈 결과 -> 미분류 (경로 탈출 불가)
+  DOMAIN="$(python3 - "$DOMAIN_RAW" <<'PY'
+import sys, re, unicodedata
+d = unicodedata.normalize("NFC", sys.argv[1])
+d = d.replace("/", " ").replace("\\", " ").replace("..", " ")
+d = re.sub(r"\s+", "_", d.strip())
+d = re.sub(r"[^가-힣A-Za-z0-9_-]", "", d)
+d = d.strip("._-")[:30].strip("._-")
+print(d or "미분류")
+PY
+)"
+
+  DEST_DIR="$OUT_DIR/$DOMAIN"
+  mkdir -p "$DEST_DIR"
+  DEST="$DEST_DIR/$STEM.md"
+  cat > "$DEST"        # stdin(요약 마크다운) -> 파일
+  echo "SAVED_FILE: $DEST"
+  exit 0
+fi
+
+# ──────────────────────────────────────────────────────────────────────────
+# 추출 모드:  yt-script <URL> [lang]
+# ──────────────────────────────────────────────────────────────────────────
+URL="${1:-}"
+LANG_CODE="${2:-ko}"
+[ -z "$LANG_CODE" ] && LANG_CODE="ko"
+
+if [ -z "$URL" ]; then
+  echo "사용법: yt-script <유튜브 URL> [언어코드(기본 ko)]" >&2
+  echo "        yt-script --save <transcript_path> <domain>   (요약 저장, stdin)" >&2
+  exit 1
+fi
+
+if ! command -v yt-dlp >/dev/null 2>&1; then
+  echo "오류: yt-dlp 가 설치돼 있지 않습니다." >&2
+  echo "  설치:  brew install yt-dlp   (또는  pip3 install --user yt-dlp)" >&2
+  exit 127
+fi
+
+CLEAN="$(resolve_clean)"
+if [ ! -f "$CLEAN" ]; then
+  echo "오류: ytclean.py 를 찾을 수 없습니다: $CLEAN" >&2
+  echo "  → install.sh 를 다시 실행하세요(ytclean.py 심링크)." >&2
+  exit 127
+fi
+
+mkdir -p "$OUT_DIR/_transcripts"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# 1) 메타데이터(제목·ID·챕터) — yt-dlp 한 번에 3줄로(네트워크 왕복 최소화). 실패해도 진행.
+#    --print 순서대로 1줄=제목, 2줄=ID, 3줄=챕터JSON.
+META="$(yt-dlp --no-warnings --no-playlist --skip-download \
+  --print '%(title)s' --print '%(id)s' --print '%(chapters)j' \
+  "$URL" 2>/dev/null || true)"
+TITLE="$(printf '%s\n' "$META" | sed -n '1p')"
+VID="$(printf '%s\n' "$META" | sed -n '2p')"
+CHAPTERS="$(printf '%s\n' "$META" | sed -n '3p')"
+[ -z "$VID" ] && VID="video"
+[ -z "$TITLE" ] && TITLE="youtube_${VID}"
+case "$CHAPTERS" in
+  ""|"null"|"NA"|"none"|"None"|"[]") CHAPTERS="" ;;   # 챕터 없음/실패 → ytclean 평문 폴백
+esac
+
+# 2) 자막 다운로드 — 수동자막 우선, 없으면 자동자막. stderr 는 차단 진단용 로그로.
+DL_LOG="$TMP/dl.log"
+yt-dlp --no-warnings --no-playlist --skip-download \
+  --write-subs --write-auto-subs \
+  --sub-langs "${LANG_CODE},${LANG_CODE}-orig,en,en-orig" \
+  --sub-format "vtt/srv3/best" \
+  -o "${TMP}/sub.%(ext)s" "$URL" >/dev/null 2>"$DL_LOG" || true
+
+# 3) 자막 파일 선택 — 요청 언어 우선순위(lang, lang-orig, en, en-orig)
+SUB=""; LANG_USED=""
+for L in "$LANG_CODE" "${LANG_CODE}-orig" "en" "en-orig"; do
+  CAND="$(ls -1 "${TMP}/sub.${L}.vtt" 2>/dev/null | head -n1 || true)"
+  if [ -n "$CAND" ]; then SUB="$CAND"; LANG_USED="$L"; break; fi
+done
+if [ -z "$SUB" ]; then                       # 폴백: 아무 vtt
+  SUB="$(ls -1 "${TMP}"/*.vtt 2>/dev/null | head -n1 || true)"
+  if [ -n "$SUB" ]; then
+    LANG_USED="$(basename "$SUB")"; LANG_USED="${LANG_USED#sub.}"; LANG_USED="${LANG_USED%.vtt}"
+  fi
+fi
+[ -z "$SUB" ] && SUB="$(ls -1 "${TMP}"/sub.* 2>/dev/null | head -n1 || true)"  # 폴백2: 비-vtt
+
+if [ -z "$SUB" ]; then
+  if grep -qiE '403|ipblock|requestblock|sign in|bot' "$DL_LOG" 2>/dev/null; then
+    echo "차단/오류: 유튜브가 요청을 막았습니다(403/IpBlocked 등)." >&2
+    echo "  → 'yt-dlp -U' (brew면 'brew upgrade yt-dlp') 후 잠시 뒤 재시도. 가정용 IP의 로컬 맥에서 성공률이 높습니다." >&2
+    exit 3
+  fi
+  echo "자막 없음: 이 영상에는 ${LANG_CODE}/en 자막이 없습니다(비공개·지역제한 가능)." >&2
+  echo "  → 유튜브에서 '··· → 스크립트 표시'로 직접 복사하세요." >&2
+  exit 2
+fi
+
+# 4) 본문 생성(ytclean.py — VTT 정리 + 챕터 버킷팅)
+BODY="$(python3 "$CLEAN" "$SUB" "$CHAPTERS")"
+if printf '%s\n' "$BODY" | grep -q '^## \['; then HAS_CH="true"; else HAS_CH="false"; fi
+
+# 5) 파일명 stem / 경로 / 기존 도메인 목록
+SAFE="$(python3 - "$TITLE" <<'PY'
+import sys, re
+t = re.sub(r"[^\w가-힣 ._-]", "", sys.argv[1]).strip().replace(" ", "_")[:60]
+print(t or "youtube")
+PY
+)"
+DATE="$(date +%F)"
+STEM="${DATE}_${SAFE}_${VID}"
+OUT_PATH="$OUT_DIR/_transcripts/${STEM}.txt"
+
+DOMAINS="$(python3 - "$OUT_DIR" <<'PY'
+import os, sys
+base = sys.argv[1]
+try:
+    subs = [n for n in sorted(os.listdir(base))
+            if os.path.isdir(os.path.join(base, n)) and not n.startswith("_")]
+except FileNotFoundError:
+    subs = []
+print(", ".join(subs))
+PY
+)"
+
+SRC_URL="https://www.youtube.com/watch?v=${VID}"
+
+# 6) 헤더(표시용 힌트) + 본문 저장
+{
+  echo "---"
+  echo "title: ${TITLE}"
+  echo "source_url: ${SRC_URL}"
+  echo "date: ${DATE}"
+  echo "lang_used: ${LANG_USED:-?}"
+  echo "has_chapters: ${HAS_CH}"
+  echo "existing_domains: ${DOMAINS}"
+  echo "---"
+  echo
+  echo "# ${TITLE}"
+  echo
+  printf '%s\n' "$BODY"
+} > "$OUT_PATH"
+
+# 7) 클립보드 복사(원문 자막, best-effort)
+if command -v pbcopy >/dev/null 2>&1; then
+  pbcopy < "$OUT_PATH" 2>/dev/null || true
+fi
+
+# 8) 결과 안내 — OUTPUT_FILE 마커로 Claude Code 가 경로를 인식
+echo "OUTPUT_FILE: $OUT_PATH"
+echo "제목: $TITLE"
+echo "줄 수: $(grep -c '' "$OUT_PATH" | tr -d ' ')"
+echo "챕터: $HAS_CH"
