@@ -24,6 +24,13 @@ resolve_clean() {
   echo "$SELF_DIR/ytclean.py"
 }
 
+# $1(폴더) 안의 가장 최근 .md(_transcripts 제외) 절대경로를 출력(없으면 빈 문자열).
+# stat 으로 mtime 정렬 — find 결과가 비어도 안전(빈 입력 시 cwd 를 뒤지지 않음).
+latest_md() {
+  find "$1" -type f -name '*.md' -not -path "$1/_transcripts/*" -print0 2>/dev/null \
+    | xargs -0 stat -f '%m %N' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-
+}
+
 # ──────────────────────────────────────────────────────────────────────────
 # 저장 모드:  yt-script --save <transcript_path> <domain>   (.md 본문은 stdin)
 # ──────────────────────────────────────────────────────────────────────────
@@ -69,27 +76,68 @@ PY
 fi
 
 # ──────────────────────────────────────────────────────────────────────────
-# 발행 모드:  yt-script --publish [summary_md]
-#   저장된 요약 .md 를 git repo(YT_PUBLISH_DIR)로 복사·커밋·푸시한다.
+# 최근 요약본 경로:  yt-script --latest   (부작용 없음)
+#   OUT_DIR 안의 가장 최근 .md(_transcripts 제외) 경로를 'LATEST_FILE:' 로 출력.
+#   /yt-push 가 "어떤 요약본을 올릴지" 정한 뒤 그 내용을 Read 할 때 쓴다.
+# ──────────────────────────────────────────────────────────────────────────
+if [ "${1:-}" = "--latest" ]; then
+  ODIR="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUT_DIR")"
+  F="$(latest_md "$ODIR")"
+  if [ -z "$F" ]; then
+    echo "오류: 요약본(.md)을 찾지 못했습니다 ($ODIR)." >&2
+    exit 1
+  fi
+  echo "LATEST_FILE: $F"
+  exit 0
+fi
+
+# ──────────────────────────────────────────────────────────────────────────
+# 발행 폴더 목록:  yt-script --topics   (부작용 없음)
+#   발행 루트(YT_PUBLISH_DIR) 바로 아래의 기존 주제 폴더명을 출력.
+#   /yt-push 가 "기존 폴더 재사용 vs 새 폴더" 를 판단할 때 쓰는 힌트.
+# ──────────────────────────────────────────────────────────────────────────
+if [ "${1:-}" = "--topics" ]; then
+  if [ -z "${YT_PUBLISH_DIR:-}" ]; then
+    echo "오류: YT_PUBLISH_DIR 가 설정돼 있지 않습니다." >&2
+    exit 1
+  fi
+  echo "PUBLISH_ROOT: $YT_PUBLISH_DIR"
+  python3 - "$YT_PUBLISH_DIR" <<'PY'
+import os, sys
+base = sys.argv[1]
+try:
+    subs = [n for n in sorted(os.listdir(base))
+            if os.path.isdir(os.path.join(base, n)) and not n.startswith(".")]
+except FileNotFoundError:
+    subs = []
+print("TOPICS: " + (", ".join(subs) if subs else "(아직 없음)"))
+PY
+  exit 0
+fi
+
+# ──────────────────────────────────────────────────────────────────────────
+# 발행 모드:  yt-script --publish [summary_md] [topic]
+#   저장된 요약 .md 를 발행 루트(YT_PUBLISH_DIR)의 {주제}/ 폴더로 복사·커밋·푸시한다.
 #   - summary_md 생략 시: OUT_DIR 안의 가장 최근 .md(_transcripts 제외)를 자동 선택.
-#   - 대상 위치: $YT_PUBLISH_DIR/{도메인}/{파일명}.md (도메인=요약본 부모폴더명, 없으면 자동 생성).
-#   - 경로/도메인 안전은 --save 와 동일 규칙. 로컬 복사 후 push (네트워크/충돌 실패는 경고만).
+#   - topic(주제 폴더)은 Claude 가 요약 내용·기존 폴더(--topics)를 보고 결정해 넘긴다.
+#       생략 시엔 로컬 도메인 폴더명으로 폴백(터미널 단독 사용 편의).
+#   - 대상: $YT_PUBLISH_DIR/{정규화 topic}/{파일명}.md (없는 폴더는 자동 생성).
+#   - 경로/이름 안전은 --save 와 동일(topic 정규화·경로탈출 차단). push 실패는 경고만.
 # ──────────────────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--publish" ]; then
   if [ -z "${YT_PUBLISH_DIR:-}" ]; then
     echo "오류: YT_PUBLISH_DIR 가 설정돼 있지 않습니다." >&2
-    echo "  요약본을 올릴 git repo 안의 폴더를 가리켜야 합니다. 예:" >&2
-    echo "    export YT_PUBLISH_DIR=\"\$HOME/Desktop/dev-lab/study/youtube\"" >&2
+    echo "  요약본을 올릴 git repo 안의 '발행 루트' 폴더를 가리켜야 합니다. 예:" >&2
+    echo "    export YT_PUBLISH_DIR=\"\$HOME/Desktop/dev-lab/study\"" >&2
     exit 1
   fi
 
   ODIR="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUT_DIR")"
   SUMMARY="${2:-}"
 
-  # 인자 없으면 OUT_DIR 안의 가장 최근 .md(_transcripts 제외) 자동 선택
+  # 인자 없으면 OUT_DIR 안의 가장 최근 .md 자동 선택
   if [ -z "$SUMMARY" ]; then
-    SUMMARY="$(find "$ODIR" -type f -name '*.md' -not -path "$ODIR/_transcripts/*" -print0 2>/dev/null \
-      | xargs -0 ls -t 2>/dev/null | head -n1 || true)"
+    SUMMARY="$(latest_md "$ODIR")"
     if [ -z "$SUMMARY" ]; then
       echo "오류: 발행할 .md 요약본을 찾지 못했습니다 ($ODIR)." >&2
       exit 1
@@ -106,22 +154,23 @@ if [ "${1:-}" = "--publish" ]; then
   case "$SABS" in *.md) : ;; *) echo "오류: .md 파일이 아닙니다: $SABS" >&2; exit 1 ;; esac
   [ -f "$SABS" ] || { echo "오류: 파일이 없습니다: $SABS" >&2; exit 1; }
 
-  # 도메인 = 요약본의 부모 폴더명(정규화), 파일명은 그대로 유지
-  DOMAIN_RAW="$(basename "$(dirname "$SABS")")"
   FNAME="$(basename "$SABS")"
-  DOMAIN="$(python3 - "$DOMAIN_RAW" <<'PY'
+  # 주제 폴더 = $3 (Claude 가 내용·기존 구조 보고 결정). 생략 시 로컬 도메인 폴더명으로 폴백.
+  TOPIC_RAW="${3:-}"
+  [ -z "$TOPIC_RAW" ] && TOPIC_RAW="$(basename "$(dirname "$SABS")")"
+  TOPIC="$(python3 - "$TOPIC_RAW" <<'PY'
 import sys, re, unicodedata
 d = unicodedata.normalize("NFC", sys.argv[1])
 d = d.replace("/", " ").replace("\\", " ").replace("..", " ")
 d = re.sub(r"\s+", "_", d.strip())
 d = re.sub(r"[^가-힣A-Za-z0-9_-]", "", d)
-d = d.strip("._-")[:30].strip("._-")
+d = d.strip("._-")[:40].strip("._-")
 print(d or "미분류")
 PY
 )"
 
   # YT_PUBLISH_DIR 가 아직 없어도 됨 — 가장 가까운 존재 상위 폴더로 git repo 인지 확인하고
-  # youtube 루트와 도메인 폴더는 자동 생성한다.
+  # 발행 루트·주제 폴더는 자동 생성한다.
   PROBE="$YT_PUBLISH_DIR"
   while [ ! -d "$PROBE" ] && [ "$PROBE" != "/" ] && [ "$PROBE" != "." ]; do
     PROBE="$(dirname "$PROBE")"
@@ -133,7 +182,7 @@ PY
     exit 1
   fi
 
-  DEST_DIR="$YT_PUBLISH_DIR/$DOMAIN"
+  DEST_DIR="$YT_PUBLISH_DIR/$TOPIC"
   mkdir -p "$DEST_DIR"
   DEST="$DEST_DIR/$FNAME"
   cp "$SABS" "$DEST"
@@ -145,7 +194,7 @@ PY
     echo "변경 없음(이미 동일 내용): $REL"
     exit 0
   fi
-  git -C "$REPO_ROOT" commit -q -m "yt: ${DOMAIN}/${FNAME} 요약 추가"
+  git -C "$REPO_ROOT" commit -q -m "yt: ${TOPIC}/${FNAME} 발행" >/dev/null
   if git -C "$REPO_ROOT" push -q 2>/dev/null; then
     echo "PUSHED_FILE: $REL"
   else
@@ -165,7 +214,8 @@ LANG_CODE="${2:-ko}"
 if [ -z "$URL" ]; then
   echo "사용법: yt-script <유튜브 URL> [언어코드(기본 ko)]" >&2
   echo "        yt-script --save <transcript_path> <domain>   (요약 저장, stdin)" >&2
-  echo "        yt-script --publish [summary_md]               (요약본을 git repo 로 발행)" >&2
+  echo "        yt-script --publish [summary_md] [topic]       (요약본을 git repo 로 발행)" >&2
+  echo "        yt-script --topics | --latest                  (발행 폴더 목록 / 최근 요약본 경로)" >&2
   exit 1
 fi
 
