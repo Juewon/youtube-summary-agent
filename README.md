@@ -47,9 +47,10 @@ Claude Code 에 URL 전달
 yt_summary_agent/
 ├─ README.md       # 이 문서
 ├─ install.sh      # 1회 셋업 (yt-dlp 설치 + 전역 심링크 + PATH)
-├─ yt-script       # 자막 추출 + 요약 저장 CLI (bash)
+├─ yt-script       # 자막 추출 + 요약 저장 + git 발행 CLI (bash)
 ├─ ytclean.py      # VTT 정리 + 챕터 구간 버킷팅 (python3, 단위테스트 대상)
-└─ yt.md           # /yt 슬래시 커맨드 소스
+├─ yt.md           # /yt 슬래시 커맨드 소스 (추출→요약→저장)
+└─ yt-push.md      # /yt-push 슬래시 커맨드 소스 (요약본 git 발행)
 ```
 
 ## 사전 요구
@@ -96,6 +97,27 @@ YT_OUT_DIR=~/Desktop/자막 yt-script <URL>  # 출력 폴더 변경
 
 stdout 첫 줄의 `OUTPUT_FILE: <경로>` 가 Claude Code 가 읽을 자막 파일 경로다.
 파일명에 **영상 ID(VID)** 가 들어가 같은 날 동명 영상이 충돌하지 않는다. 도메인 폴더명은 저장 시 정규화된다(허용 문자만, 빈 결과는 `미분류`).
+
+## 깃 repo 로 발행 (선택)
+요약본을 로컬에 저장하는 것에 더해, **원할 때 커맨드 한 번으로** 개인 git repo 에 도메인별로 올릴 수 있다.
+저장과 동일한 `{도메인}/` 구조가 repo 안에 그대로 만들어지고, **없는 도메인 폴더는 자동 생성**된다.
+
+먼저 발행 대상 repo 를 clone 하고, 그 안의 폴더를 `YT_PUBLISH_DIR` 로 지정한다(한 번만):
+```bash
+# 예: 개인 노트 repo 의 한 폴더로 발행
+export YT_PUBLISH_DIR="$HOME/Desktop/dev-lab/study/youtube"   # ~/.zshrc 에 추가
+```
+그다음 발행:
+```bash
+yt-script --publish                 # OUT_DIR 의 가장 최근 요약본 1건 발행
+yt-script --publish <요약본.md>      # 특정 요약본 발행
+```
+Claude Code 에서는 `/yt-push`(인자 없으면 최근 1건) 로도 호출한다.
+
+- 동작: `요약본.md` 를 `YT_PUBLISH_DIR/{도메인}/` 로 복사 → `git pull --rebase` → `add`·`commit`·`push`.
+- 이미 같은 내용이면 `변경 없음` 으로 끝난다(중복 커밋 없음).
+- `push` 가 실패해도(네트워크/인증) 커밋은 남으므로 나중에 해당 repo 에서 `git push` 만 하면 된다.
+- `YT_PUBLISH_DIR` 가 비어 있으면 발행 기능만 비활성화되고 추출·요약·로컬 저장은 그대로 동작한다.
 
 ## 알려진 한계
 - 플레이리스트 URL 은 `--no-playlist` 로 **첫 영상 한 편만** 처리한다.

@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. `yt-script` **추출 모드** (`yt-script <URL> [lang]`): yt-dlp 로 자막+챕터JSON 을 받아 `ytclean.py` 로 정리하고, frontmatter 헤더(title/source_url/date/lang_used/has_chapters/existing_domains) + 챕터 구간별 본문을 `_transcripts/{stem}.txt` 에 쓴다. stdout 첫 줄 **`OUTPUT_FILE: <경로>` 마커**가 계약(contract)이다.
 2. `yt.md` (`/yt`): yt-script 실행 → `OUTPUT_FILE:` 경로 Read → **주제별 구조화 요약**(📌한 줄 / 🗂목차 / 주제별 `##`+불릿 / ✅결론) 생성 + 도메인 결정.
 3. `yt-script` **저장 모드** (`yt-script --save <transcript_path> <domain>`, 요약 .md 를 stdin): 경로 안전 검증·도메인 정규화·`mkdir -p` 후 `{도메인}/{stem}.md` 저장, `SAVED_FILE:` 출력.
+4. `yt-script` **발행 모드** (`yt-script --publish [summary_md]`, `/yt-push`): 저장된 요약 .md 를 `YT_PUBLISH_DIR`(외부 git repo 안 폴더)의 `{도메인}/` 로 복사 후 `pull --rebase`→`add`·`commit`·`push`. 인자 생략 시 OUT_DIR 의 최근 .md 1건 자동 선택. 도메인=요약본 부모폴더명(저장 때와 같은 정규화). 성공 `PUSHED_FILE:`, 동일내용 `변경 없음`, push 실패 시 커밋만 남기고 `COMMITTED_FILE:`+경고. 추출/요약과 독립(`YT_PUBLISH_DIR` 없으면 발행만 비활성).
 
 `ytclean.py` (python3, **단위테스트 대상**): VTT 정리(타임코드/cue번호/태그 제거) + **챕터 버킷팅**(`[start_i, start_{i+1})`, end_time 무시, 첫 챕터 이전은 "인트로") + **롤링 중복 머지**(`merge_rolling`, 더 긴 쪽·가장 이른 시작초 유지)를 **각 버킷 안에서** 수행(경계 넘는 자막의 오귀속 방지). 챕터 JSON 파싱 실패/빈값이면 평문 폴백. `clean_cues`/`merge_rolling`/`load_chapters`/`build_body` 함수로 import 가능. 자막만 받으므로 ffmpeg 불필요.
 
@@ -50,6 +51,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 yt-script <URL> [lang=ko]          # 추출만. 결과: ../summaries/_transcripts/{stem}.txt + 클립보드
 YT_OUT_DIR=~/Desktop/자막 yt-script <URL>   # 출력 폴더 변경
 python3 ytclean.py <vtt> [chapters_json]    # 정리 로직 단독 실행(fixture 검증용)
+export YT_PUBLISH_DIR=~/Desktop/dev-lab/study/youtube   # 발행 대상(외부 git repo 안 폴더)
+yt-script --publish [summary_md]            # 요약본을 git repo 로 발행(생략=최근 1건)
 ```
 
 테스트 스위트는 없다. **결정론 로직(`ytclean.py`)은 저장한 샘플 VTT/챕터JSON 으로 직접 검증**하고, 경로 안전은 `--save` 에 악성 도메인(`../../etc` 등)을 넣어 확인한다. 네트워크 의존(추출·차단)은 실제 URL 로 smoke 1회.
@@ -60,7 +63,9 @@ python3 ytclean.py <vtt> [chapters_json]    # 정리 로직 단독 실행(fixtur
 - **macOS 기본 bash 는 3.2** — `mapfile`/연관배열/`${v,,}` 등 bash4 문법 없음. `yt-script`·`install.sh` 수정 시 POSIX 수준으로(라인 파싱은 `sed`/`printf` 사용).
 - **경로 포함 검사는 양쪽 다 realpath.** macOS `/var`↔`/private/var` 심링크 탓에 `--save` 의 `OUT_DIR/_transcripts` 와 입력 경로를 둘 다 `os.path.realpath` 해야 정상 비교된다(안 하면 정상 입력도 거부됨).
 - **yt-dlp 메타는 한 호출로 묶는다.** title·id·chapters 를 `--print` 3개로 한 번에 받아 네트워크 왕복(=차단 위험)을 줄인다. 필드 추가 시 호출을 늘리지 말 것.
-- `OUTPUT_FILE:`/`SAVED_FILE:` 마커 형식을 바꾸면 `yt.md` 가 깨진다. 양쪽을 같이 고친다.
+- `OUTPUT_FILE:`/`SAVED_FILE:` 마커 형식을 바꾸면 `yt.md` 가, `PUSHED_FILE:`/`COMMITTED_FILE:` 는 `yt-push.md` 가 깨진다. 마커와 슬래시 커맨드를 같이 고친다.
+- **발행 모드는 `OUT_DIR`(읽기) 와 `YT_PUBLISH_DIR`(쓰기) 가 다르다.** 입력 요약본은 OUT_DIR 내부인지 검증(자막發 경로 탈출 차단)하고, 출력은 외부 repo 안 `{도메인}/` 로 *의도적으로* 나간다. `YT_PUBLISH_DIR` 는 개인 환경값이라 **코드/공개 repo 에 하드코딩하지 말 것**(env 로만). repo 존재 확인은 가장 가까운 존재 상위 폴더에서 `git rev-parse --show-toplevel` 로 하고 youtube 루트는 자동 생성한다.
+- `yt-push.md` `allowed-tools` 는 `Bash(yt-script:*)` 뿐(발행도 `--publish` 라 git/Write 권한 불필요 — git 은 `yt-script` 내부에서 실행).
 - `ytclean.py` 는 **심링크로 실행돼도** 찾도록 yt-script 가 realpath 로 자기 경로를 역산해 옆에서 호출한다 + install 이 `~/bin` 에도 심링크한다(이중). 위치 로직을 바꾸면 둘 다 확인.
 - `yt.md` `allowed-tools` 는 `Bash(yt-script:*), Read` 로 한정(저장도 `--save` 라 Write 불필요). 넓힐 때 의도 확인.
 - 저장은 **heredoc** 으로 `yt-script --save` 에 stdin 전달 — `printf | …` 는 allowed-tools 위반.

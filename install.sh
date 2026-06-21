@@ -37,13 +37,19 @@ else
   echo "  이미 등록됨"
 fi
 
-echo "[4/4] /yt 슬래시 커맨드 → ~/.claude/commands 심링크..."
+echo "[4/4] /yt · /yt-push 슬래시 커맨드 → ~/.claude/commands 심링크..."
 mkdir -p "$HOME/.claude/commands"
 ln -sf "$HERE/yt.md" "$HOME/.claude/commands/yt.md"
-echo "  ~/.claude/commands/yt.md -> $HERE/yt.md"
+ln -sf "$HERE/yt-push.md" "$HOME/.claude/commands/yt-push.md"
+echo "  ~/.claude/commands/yt.md      -> $HERE/yt.md"
+echo "  ~/.claude/commands/yt-push.md -> $HERE/yt-push.md"
 
 echo
 echo "완료 ✅  사용법:"
 echo "  터미널:      yt-script <유튜브 URL> [언어코드]"
 echo "  Claude Code: /yt <유튜브 URL>   또는 자연어로 \"이 영상 정리해줘: <URL>\""
 echo "  출력 위치:   \${YT_OUT_DIR:-소스 폴더 형제 'summaries/'}  (예: 04_Agents/youtube/summaries/)"
+echo
+echo "  발행(선택):  /yt-push  또는  yt-script --publish [요약본.md]   (git repo 로 올리기)"
+echo "    └ 먼저 대상 repo 폴더를 환경변수로 지정하세요(미설정 시 발행만 비활성):"
+echo "       export YT_PUBLISH_DIR=\"\$HOME/Desktop/dev-lab/study/youtube\"   # ~/.zshrc 에 추가"
