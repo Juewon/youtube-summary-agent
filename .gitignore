@@ -4,3 +4,6 @@
 # Python
 __pycache__/
 *.pyc
+
+# Claude 개인 로컬 메모
+.claude.local.md

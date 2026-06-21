@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 개인용 유튜브 요약 에이전트. 유튜브 자막을 추출(`yt-dlp` + `ytclean.py`)해 자막 `.txt` 로 저장하고, **Claude Code 자체가 그 파일을 읽어 주제별로 구조화한 한국어 요약**을 만든 뒤, `yt-script --save` 로 도메인 폴더에 `.md` 로 저장한다. 별도 LLM API 키는 쓰지 않는다 — 요약·도메인 판단 두뇌는 Claude Code, 파일쓰기·경로 안전은 `yt-script` 다.
 
-이 폴더가 **소스 오브 트루스**다. 전역 위치(`~/bin/yt-script`, `~/bin/ytclean.py`, `~/.claude/commands/yt.md`)는 여기로 향하는 **심링크**다. 전역 동작을 바꾸려면 이 폴더 파일을 수정하면 되고 재설치는 불필요(심링크라 자동 반영). git 저장소가 아니다.
+이 폴더가 **소스 오브 트루스**다. 전역 위치(`~/bin/yt-script`, `~/bin/ytclean.py`, `~/.claude/commands/yt.md`, `~/.claude/commands/yt-push.md`)는 여기로 향하는 **심링크**다. 전역 동작을 바꾸려면 이 폴더 파일을 수정하면 되고 재설치는 불필요(심링크라 자동 반영). 이 폴더 자체가 **git 저장소**이며 GitHub origin 으로 발행돼 있다 — 변경은 커밋/푸시로 반영한다(개인 식별 정보는 `.claude.local.md` 참고).
 
 ## Architecture
 
