@@ -59,10 +59,13 @@ yt_summary_agent/
 
 ## 설치 (한 번만)
 ```bash
-cd /Users/seednpc09/Desktop/04_Agents/youtube/yt_summary_agent
+git clone https://github.com/Juewon/youtube-summary-agent.git
+cd youtube-summary-agent
 ./install.sh
 source ~/.zshrc      # 현재 터미널에 PATH 즉시 적용
 ```
+> 이 폴더가 **소스 of truth** 다. 전역 위치(`~/bin`, `~/.claude/commands`)에는 심링크로 연결되므로,
+> clone 한 폴더를 옮기거나 지우면 `yt-script`·`/yt` 도 동작하지 않는다. 폴더는 유지할 곳에 두고 설치할 것.
 `install.sh` 가 하는 일: yt-dlp 설치 확인/설치 · `~/bin/yt-script`·`~/bin/ytclean.py` 심링크 · `~/bin` PATH 등록 ·
 `~/.claude/commands/yt.md` 심링크. 여러 번 실행해도 안전(idempotent).
 
