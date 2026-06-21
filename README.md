@@ -115,17 +115,23 @@ export YT_PUBLISH_DIR="$HOME/Desktop/dev-lab/study"   # ~/.zshrc 에 추가
 /yt-push <요약본.md 경로>        # 특정 요약본 발행
 ```
 `/yt-push` 는 ① 대상 요약본 결정 → ② 내용 파악(Read) → ③ `yt-script --topics` 로 기존 폴더 확인 →
-④ **주제 폴더 판단(재사용/신설)** → ⑤ `yt-script --publish <요약본> <주제폴더>` 실행, 순으로 동작한다.
+④ **주제 폴더 판단(재사용/신설)** → ⑤ `yt-script --ls <주제>` 로 기존 파일 확인 →
+⑥ **깔끔한 제목 파일명 결정** → ⑦ `yt-script --publish <요약본> <주제> <파일명.md>` 실행, 순으로 동작한다.
 
-터미널에서 수동으로 쓸 수도 있다(이때 주제 폴더를 직접 지정):
+발행 파일명은 로컬 stem(`{날짜}_{제목}_{VID}.md`) 대신 **날짜·영상ID 없는 읽기 좋은 슬러그**로 새로 짓는다
+(예: `claude-code-실전-치트시트.md`). 로컬 `summaries/` 는 충돌 방지를 위해 stem 을 그대로 유지한다.
+
+터미널에서 수동으로 쓸 수도 있다(주제·파일명을 직접 지정):
 ```bash
-yt-script --topics                       # 발행 루트의 기존 주제 폴더 목록
-yt-script --latest                       # 가장 최근 요약본 경로
-yt-script --publish <요약본.md> <주제폴더>  # 그 폴더로 발행(생략 시 로컬 도메인명으로 폴백)
+yt-script --topics                              # 발행 루트의 기존 주제 폴더 목록
+yt-script --ls <주제>                            # 그 폴더의 기존 파일명
+yt-script --latest                              # 가장 최근 요약본 경로
+yt-script --publish <요약본.md> <주제> <파일명.md>  # 그 폴더에 그 이름으로 발행
+#  topic 생략 시 로컬 도메인명, filename 생략 시 원본 파일명으로 폴백
 ```
 
-- 동작: 요약본을 `YT_PUBLISH_DIR/{주제}/` 로 복사 → `git pull --rebase` → `add`·`commit`·`push`. 없는 폴더는 자동 생성.
-- 주제 폴더명은 안전하게 정규화된다(허용 문자만·경로 탈출 차단, 빈 결과는 `미분류`).
+- 동작: 요약본을 `YT_PUBLISH_DIR/{주제}/{파일명}.md` 로 복사 → `git pull --rebase` → `add`·`commit`·`push`. 없는 폴더는 자동 생성.
+- 주제·파일명은 안전하게 정규화된다(공백→하이픈, 허용 문자만, 경로 탈출 차단; 빈 결과는 `미분류`/`untitled`).
 - 이미 같은 내용이면 `변경 없음` 으로 끝난다(중복 커밋 없음).
 - `push` 가 실패해도(네트워크/인증) 커밋은 남으므로 나중에 해당 repo 에서 `git push` 만 하면 된다.
 - `YT_PUBLISH_DIR` 가 비어 있으면 발행 기능만 비활성화되고 추출·요약·로컬 저장은 그대로 동작한다.
